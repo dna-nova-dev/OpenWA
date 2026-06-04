@@ -12,6 +12,7 @@
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
+    "setup:malla": "node scripts/setup-malla.mjs",
     "dev": "concurrently -n api,dashboard -c blue,green \"npm run start:dev\" \"npm run dashboard:dev\"",
     "dashboard:install": "cd dashboard && npm install",
     "dashboard:dev": "cd dashboard && npm run dev",
@@ -49,11 +50,13 @@
     "@nestjs/swagger": "^11.4.3",
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.0",
+    "@nestjs/websockets": "^11.1.24",
     "archiver": "^8.0.0",
     "bullmq": "^5.76.10",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "dockerode": "^5.0.0",
+    "dotenv": "^17.4.2",
     "helmet": "^8.0.0",
     "ioredis": "^5.9.3",
     "pg": "^8.21.0",
@@ -97,6 +100,15 @@
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.59.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "sqlite3",
+      "puppeteer",
+      "@nestjs/core",
+      "bcrypt",
+      "@bull-board/api"
+    ]
   },
   "jest": {
     "moduleFileExtensions": [

@@ -6,8 +6,11 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, DataSource } from 'typeorm';
+import * as fs from 'fs';
+import * as path from 'path';
 import { Session, SessionStatus } from './entities/session.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
@@ -43,11 +46,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     private readonly eventsGateway: EventsGateway,
     private readonly webhookService: WebhookService,
     private readonly hookManager: HookManager,
+    private readonly configService: ConfigService,
   ) {}
 
   /**
-   * On backend startup, reset all active session statuses to disconnected
-   * because the engines are not running yet after restart
+   * On backend startup:
+   *   1. Reset all "active" session statuses to disconnected (their engines
+   *      are gone — no in-memory state survived the restart).
+   *   2. Auto-resume sessions that were genuinely READY before shutdown.
+   *      Those have valid LocalAuth data on disk, so re-init typically
+   *      restores the WhatsApp Web session without a QR scan.
+   *
+   * Skipping auto-resume for QR_READY / AUTHENTICATING / INITIALIZING:
+   * those were mid-flow when the process died, so re-arrancarlas auto
+   * tiende a quedar colgado o pedir QR — mejor exigir acción manual.
    */
   async onModuleInit(): Promise<void> {
     const activeStatuses = [
@@ -57,15 +69,49 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       SessionStatus.AUTHENTICATING,
     ];
 
-    const result = await this.sessionRepository.update(
-      { status: In(activeStatuses) },
+    const previouslyActive = await this.sessionRepository.find({
+      where: { status: In(activeStatuses) },
+    });
+
+    if (previouslyActive.length === 0) return;
+
+    await this.sessionRepository.update(
+      { id: In(previouslyActive.map(s => s.id)) },
       { status: SessionStatus.DISCONNECTED },
     );
 
-    if (result.affected && result.affected > 0) {
-      this.logger.log(`Reset ${result.affected} session(s) to disconnected on startup`, {
-        action: 'startup_reset',
-        affected: result.affected,
+    this.logger.log(
+      `Reset ${previouslyActive.length} session(s) to disconnected on startup`,
+      { action: 'startup_reset', affected: previouslyActive.length },
+    );
+
+    // Auto-resumear cualquier sesión que estaba activa (no solo READY).
+    // Las que estaban en READY tienen auth confirmada en disco; las que estaban
+    // en AUTHENTICATING/INITIALIZING también tienen LocalAuth válido (solo
+    // estaban arrancando o reconectando cuando murió el proceso). Solo
+    // excluimos QR_READY: esa estaba esperando el primer scan, no tiene auth.
+    const toResume = previouslyActive.filter(
+      s => s.status !== SessionStatus.QR_READY,
+    );
+
+    if (toResume.length === 0) return;
+
+    this.logger.log(
+      `Auto-resuming ${toResume.length} previously-ready session(s)`,
+      { action: 'auto_resume_start', count: toResume.length },
+    );
+
+    // Fire-and-forget: each start() launches a browser (slow), no bloqueamos
+    // el boot. Cada error se loguea pero no propaga.
+    for (const session of toResume) {
+      this.start(session.id).catch(err => {
+        // logger.error signature: (message, trace?, context?). El metadata
+        // estructurado va en el TERCER arg, no el segundo.
+        this.logger.error(
+          `Auto-resume failed for session '${session.name}': ${err?.message ?? err}`,
+          err?.stack,
+          { sessionId: session.id, action: 'auto_resume_failed' },
+        );
       });
     }
   }
@@ -434,6 +480,71 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       action: 'stop',
     });
     await this.updateStatus(id, SessionStatus.DISCONNECTED);
+    return this.findOne(id);
+  }
+
+  /**
+   * Restart a session — equivalent to stop + start, but tolerates not being
+   * running and (optionally) wipes the stored WhatsApp auth so the next start
+   * produces a fresh QR (use this to re-link to a different account/number).
+   *
+   * `relink: false` (default) keeps the auth folder → reconnects to the same
+   * number if WhatsApp credentials are still valid.
+   * `relink: true` removes `<sessionDataPath>/session-<id>` → forces re-scan.
+   */
+  async restart(id: string, opts: { relink?: boolean } = {}): Promise<Session> {
+    const session = await this.findOne(id);
+
+    // Tear down any active engine and pending reconnects. We don't error if
+    // it wasn't running — restart should be idempotent from any state.
+    this.cancelReconnect(id);
+    const engine = this.engines.get(id);
+    if (engine) {
+      await engine.disconnect();
+      this.engines.delete(id);
+    }
+    await this.updateStatus(id, SessionStatus.DISCONNECTED);
+
+    if (opts.relink) {
+      const dataPath = this.configService.get<string>('engine.sessionDataPath') ?? './data/sessions';
+      // whatsapp-web.js LocalAuth writes under `session-<clientId>`; clientId = session.id.
+      const authPath = path.resolve(dataPath, `session-${id}`);
+      try {
+        await fs.promises.rm(authPath, { recursive: true, force: true });
+        this.logger.log(`Session auth wiped for re-link: ${session.name}`, {
+          sessionId: id,
+          authPath,
+          action: 'relink_wipe',
+        });
+      } catch (err) {
+        // Non-fatal: if the folder didn't exist or couldn't be removed, we still
+        // try to start. WhatsApp will request a QR if it can't load the session.
+        this.logger.warn(`Failed to wipe auth path (continuing): ${String(err)}`, {
+          sessionId: id,
+          authPath,
+        });
+      }
+    }
+
+    // Re-initialize reconnect state and the engine (same as start()).
+    const config = session.config as {
+      maxReconnectAttempts?: number;
+      reconnectBaseDelay?: number;
+    } | null;
+    this.reconnectStates.set(id, {
+      attempts: 0,
+      timer: null,
+      maxAttempts: config?.maxReconnectAttempts ?? 5,
+      baseDelay: config?.reconnectBaseDelay ?? 5000,
+    });
+
+    await this.initializeEngine(id, session);
+
+    this.logger.log(`Session restarted: ${session.name}`, {
+      sessionId: id,
+      relink: !!opts.relink,
+      action: 'restart',
+    });
     return this.findOne(id);
   }
 
