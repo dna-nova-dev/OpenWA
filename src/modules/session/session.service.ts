@@ -358,6 +358,45 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
             this.eventsGateway.emitMessage(id, finalMessage as Record<string, unknown>);
           });
       },
+      // Handler antes faltante — el adapter de whatsapp-web.js disparaba este
+      // callback pero `engine.initialize` no lo registraba. Resultado: los
+      // ack updates (server / delivered / read) nunca llegaban al webhook
+      // ni a los WS clients. Acá los conectamos al mismo pipeline que
+      // onMessage: hook → webhook dispatch → WS emit.
+      onMessageAck: (messageId: string, ack: number): void => {
+        const ackName =
+          ack === -1 ? 'error' :
+          ack === 0 ? 'pending' :
+          ack === 1 ? 'sent' :
+          ack === 2 ? 'delivered' :
+          ack === 3 ? 'read' :
+          ack === 4 ? 'played' : `ack_${ack}`;
+        this.logger.debug(`Ack ${ack} (${ackName}) for ${messageId}`, {
+          sessionId: id,
+          messageId,
+          ack,
+          ackName,
+          action: 'message_ack',
+        });
+        const ackData = { messageId, ack, ackName };
+        void this.hookManager
+          .execute('message:ack', ackData, {
+            sessionId: id,
+            source: 'Engine',
+          })
+          .then(({ continue: shouldContinue, data: finalData }) => {
+            if (!shouldContinue) return;
+            void this.webhookService.dispatch(
+              id,
+              'message.ack',
+              finalData as Record<string, unknown>,
+            );
+            this.eventsGateway.emitMessageAck(
+              id,
+              finalData as { messageId: string; ack: number; ackName: string },
+            );
+          });
+      },
       onDisconnected: (reason: string): void => {
         this.logger.warn(`Session disconnected: ${reason}`, {
           sessionId: id,

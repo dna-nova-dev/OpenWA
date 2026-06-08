@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { SessionService } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import { EngineFactory } from '../../engine/engine.factory';
@@ -98,6 +99,10 @@ describe('SessionService', () => {
         { provide: EventsGateway, useValue: eventsGateway },
         { provide: WebhookService, useValue: webhookService },
         { provide: HookManager, useValue: hookManager },
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn((key: string) => (key === 'engine.sessionDataPath' ? './data/sessions' : undefined)) },
+        },
       ],
     }).compile();
 

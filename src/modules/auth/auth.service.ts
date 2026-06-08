@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, UnauthorizedException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import { existsSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
@@ -9,6 +9,18 @@ import { CreateApiKeyDto, UpdateApiKeyDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 
 const API_KEY_FILE = join(process.cwd(), 'data', '.api-key');
+
+/**
+ * Read the master API key from the environment. When set, this value acts as a
+ * fixed ADMIN credential that bypasses the database key store — handy for
+ * server-to-server integrations (e.g. Malla SaaS) where you want a stable key
+ * managed via env vars instead of one auto-seeded into data/.api-key.
+ * Returns undefined when unset/blank so the feature stays opt-in.
+ */
+function getMasterKey(): string | undefined {
+  const raw = process.env.API_MASTER_KEY?.trim();
+  return raw ? raw : undefined;
+}
 
 @Injectable()
 export class AuthService implements OnModuleInit {
@@ -158,6 +170,13 @@ export class AuthService implements OnModuleInit {
   }
 
   async validateApiKey(rawKey: string, clientIp?: string, sessionId?: string): Promise<ApiKey> {
+    // Master key short-circuit: a stable ADMIN credential from env, no DB lookup
+    // and no IP/session/expiry restrictions. Compared in constant time.
+    const masterKey = getMasterKey();
+    if (masterKey && this.safeEquals(rawKey, masterKey)) {
+      return this.buildMasterApiKey();
+    }
+
     const keyHash = this.hashKey(rawKey);
     const apiKey = await this.apiKeyRepository.findOne({ where: { keyHash } });
 
@@ -201,6 +220,39 @@ export class AuthService implements OnModuleInit {
 
   private hashKey(rawKey: string): string {
     return createHash('sha256').update(rawKey).digest('hex');
+  }
+
+  /** Constant-time string comparison (length-safe) for secret matching. */
+  private safeEquals(a: string, b: string): boolean {
+    const bufA = Buffer.from(a);
+    const bufB = Buffer.from(b);
+    if (bufA.length !== bufB.length) {
+      return false;
+    }
+    return timingSafeEqual(bufA, bufB);
+  }
+
+  /**
+   * Build an in-memory ADMIN ApiKey for the master key. Not persisted; usage
+   * stats are not tracked for it. Has no IP/session restrictions and no expiry.
+   */
+  private buildMasterApiKey(): ApiKey {
+    const now = new Date();
+    return {
+      id: 'master',
+      name: 'Master API Key (env)',
+      keyHash: '',
+      keyPrefix: 'master',
+      role: ApiKeyRole.ADMIN,
+      allowedIps: null,
+      allowedSessions: null,
+      isActive: true,
+      expiresAt: null,
+      lastUsedAt: now,
+      usageCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
   }
 
   private isIpAllowed(clientIp: string, allowedIps: string[]): boolean {

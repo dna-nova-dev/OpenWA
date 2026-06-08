@@ -143,6 +143,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // eslint-disable-next-line @typescript-eslint/no-misused-promises
     this.client.on('message', async msg => {
       try {
+        // notifyName is the sender's display name; exposed on the raw payload
+        // (_data) and not on the typed Message, so we read it defensively.
+        const notifyName = (msg as { _data?: { notifyName?: string } })._data?.notifyName;
+
         const incomingMessage: IncomingMessage = {
           id: msg.id._serialized,
           from: msg.from,
@@ -153,6 +157,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           timestamp: msg.timestamp,
           fromMe: msg.fromMe,
           isGroup: msg.from.endsWith('@g.us'),
+          senderName: notifyName || undefined,
         };
 
         // Handle media
@@ -358,6 +363,22 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     this.ensureReady();
     const numberId = await this.client!.getNumberId(number);
     return numberId !== null;
+  }
+
+  async sendChatState(chatId: string, state: 'typing' | 'recording'): Promise<void> {
+    this.ensureReady();
+    const chat = await this.client!.getChatById(chatId);
+    if (state === 'recording') {
+      await chat.sendStateRecording();
+    } else {
+      await chat.sendStateTyping();
+    }
+  }
+
+  async clearChatState(chatId: string): Promise<void> {
+    this.ensureReady();
+    const chat = await this.client!.getChatById(chatId);
+    await chat.clearState();
   }
 
   async getGroups(): Promise<Group[]> {

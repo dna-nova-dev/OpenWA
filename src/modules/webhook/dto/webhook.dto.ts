@@ -22,7 +22,9 @@ export class CreateWebhookDto {
     description: 'Webhook URL to receive events',
     example: 'https://your-server.com/webhook',
   })
-  @IsUrl()
+  // require_tld:false so internal/local consumers (e.g. http://malla:3000 on a
+  // Docker/Coolify network, or http://localhost:3000 in dev) are accepted.
+  @IsUrl({ require_tld: false })
   url: string;
 
   @ApiPropertyOptional({
@@ -66,7 +68,7 @@ export class CreateWebhookDto {
 export class UpdateWebhookDto {
   @ApiPropertyOptional({ description: 'Webhook URL' })
   @IsOptional()
-  @IsUrl()
+  @IsUrl({ require_tld: false })
   url?: string;
 
   @ApiPropertyOptional({ description: 'Event types to subscribe to' })

@@ -32,6 +32,8 @@ export interface IncomingMessage {
   timestamp: number;
   fromMe: boolean;
   isGroup: boolean;
+  /** Sender's WhatsApp display name (notifyName), when available. */
+  senderName?: string;
   media?: {
     mimetype: string;
     filename?: string;
@@ -240,6 +242,11 @@ export interface IWhatsAppEngine {
   getContacts(): Promise<Contact[]>;
   getContactById(contactId: string): Promise<Contact | null>;
   checkNumberExists(number: string): Promise<boolean>;
+
+  /** Presencia/typing — el cliente final ve "escribiendo..." hasta que llegue
+   *  un mensaje, se llame `clearChatState`, o pasen ~25s sin renovar. */
+  sendChatState(chatId: string, state: 'typing' | 'recording'): Promise<void>;
+  clearChatState(chatId: string): Promise<void>;
 
   // Groups - Basic
   getGroups(): Promise<Group[]>;

@@ -132,6 +132,53 @@ export class SessionController {
     return this.transformSession(session);
   }
 
+  @Post(':id/restart')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({
+    summary: 'Restart a session (stop + start). Pass relink=true to wipe the stored WhatsApp auth and force a fresh QR.',
+  })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Session restarted',
+    type: SessionResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async restart(
+    @Param('id') id: string,
+    @Body() body: { relink?: boolean } = {},
+  ): Promise<SessionResponseDto> {
+    const session = await this.sessionService.restart(id, { relink: !!body?.relink });
+    await this.auditService.logInfo(AuditAction.SESSION_STARTED, {
+      sessionId: session.id,
+      sessionName: session.name,
+    });
+    return this.transformSession(session);
+  }
+
+  @Post(':id/logout')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({
+    summary: 'Log out the currently linked WhatsApp account: stop + wipe stored auth + start. Next QR is fresh.',
+  })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Session logged out and restarted with fresh QR',
+    type: SessionResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async logout(@Param('id') id: string): Promise<SessionResponseDto> {
+    // Semantic alias of `/restart {relink:true}` — kept as its own endpoint
+    // because consumers (and humans) think about "logout" as a discrete action.
+    const session = await this.sessionService.restart(id, { relink: true });
+    await this.auditService.logInfo(AuditAction.SESSION_STOPPED, {
+      sessionId: session.id,
+      sessionName: session.name,
+    });
+    return this.transformSession(session);
+  }
+
   @Get(':id/qr')
   @ApiOperation({ summary: 'Get QR code for session authentication' })
   @ApiParam({ name: 'id', description: 'Session ID' })

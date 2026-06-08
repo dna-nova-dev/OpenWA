@@ -247,6 +247,46 @@ describe('AuthService', () => {
     });
   });
 
+  // ── master key (API_MASTER_KEY) ───────────────────────────────────
+
+  describe('validateApiKey with API_MASTER_KEY', () => {
+    const ORIGINAL = process.env.API_MASTER_KEY;
+
+    afterEach(() => {
+      if (ORIGINAL === undefined) delete process.env.API_MASTER_KEY;
+      else process.env.API_MASTER_KEY = ORIGINAL;
+    });
+
+    it('should authenticate the master key as ADMIN without a DB lookup', async () => {
+      process.env.API_MASTER_KEY = 'super-master-key';
+
+      const result = await service.validateApiKey('super-master-key');
+
+      expect(result.role).toBe(ApiKeyRole.ADMIN);
+      expect(result.id).toBe('master');
+      expect(repository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('should fall through to DB lookup for a non-master key', async () => {
+      process.env.API_MASTER_KEY = 'super-master-key';
+      const key = createMockApiKey({ keyHash: hashKey('other') });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
+
+      const result = await service.validateApiKey('other');
+
+      expect(result.id).toBe(key.id);
+      expect(repository.findOne).toHaveBeenCalled();
+    });
+
+    it('should not treat an empty API_MASTER_KEY as valid', async () => {
+      process.env.API_MASTER_KEY = '';
+      (repository.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(service.validateApiKey('')).rejects.toThrow(UnauthorizedException);
+    });
+  });
+
   // ── hasPermission ─────────────────────────────────────────────────
 
   describe('hasPermission', () => {

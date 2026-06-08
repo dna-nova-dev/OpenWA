@@ -474,6 +474,19 @@ export class MessageService {
     return engine;
   }
 
+  /** Presence/typing — útil para hacer sentir más humano al bot LLM:
+   *  llamar typing → esperar (proporcional al tamaño del próximo mensaje)
+   *  → enviar. WhatsApp Web borra el indicador solo al recibir el mensaje. */
+  async sendChatState(sessionId: string, chatId: string, state: 'typing' | 'recording'): Promise<void> {
+    const engine = this.getEngine(sessionId);
+    await engine.sendChatState(chatId, state);
+  }
+
+  async clearChatState(sessionId: string, chatId: string): Promise<void> {
+    const engine = this.getEngine(sessionId);
+    await engine.clearChatState(chatId);
+  }
+
   private buildMediaInput(dto: SendMediaMessageDto): MediaInput {
     if (!dto.url && !dto.base64) {
       throw new BadRequestException('Either url or base64 must be provided');

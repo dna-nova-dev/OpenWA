@@ -15,6 +15,41 @@ export class MessageController {
     private readonly bulkMessageService: BulkMessageService,
   ) {}
 
+  @Post('chats/:chatId/typing')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: "Show 'typing…' presence in the chat (for ~25s)" })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'chatId', description: 'Chat ID (ej. 5215512345678@c.us)' })
+  async sendTyping(
+    @Param('sessionId') sessionId: string,
+    @Param('chatId') chatId: string,
+  ) {
+    await this.messageService.sendChatState(sessionId, chatId, 'typing');
+  }
+
+  @Post('chats/:chatId/recording')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: "Show 'recording audio…' presence in the chat" })
+  async sendRecording(
+    @Param('sessionId') sessionId: string,
+    @Param('chatId') chatId: string,
+  ) {
+    await this.messageService.sendChatState(sessionId, chatId, 'recording');
+  }
+
+  @Post('chats/:chatId/clear-state')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Clear typing/recording state' })
+  async clearChatState(
+    @Param('sessionId') sessionId: string,
+    @Param('chatId') chatId: string,
+  ) {
+    await this.messageService.clearChatState(sessionId, chatId);
+  }
+
   @Get()
   @ApiOperation({ summary: 'Get message history for a session' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
